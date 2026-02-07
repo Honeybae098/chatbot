@@ -1,4 +1,5 @@
 // prompts/conversation-prompts.js
+import { CAMTECH_SYSTEM_PROMPT } from './system-prompt.js';
 
 function buildContextualPrompt(userMessage, conversationHistory, knowledgeBase) {
   // Get last 5 messages for context
@@ -94,4 +95,4 @@ function detectIntent(message) {
   return 'general';
 }
 
-module.exports = { buildContextualPrompt, detectIntent };
+export { buildContextualPrompt, detectIntent };

@@ -85,4 +85,4 @@ KNOWLEDGE BASE:
 
 Remember: You're helping shape students' futures. Be helpful, accurate, and inspiring!`;
 
-module.exports = { CAMTECH_SYSTEM_PROMPT };
+export { CAMTECH_SYSTEM_PROMPT };

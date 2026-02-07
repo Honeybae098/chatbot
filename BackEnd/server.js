@@ -3,6 +3,7 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
+import deepSeekService from './services/deepseekService.js';
 
 // Set up PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
@@ -16,15 +17,16 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Configuration
-const OPENROUTER_API_KEY = "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";
 const PORT = 5001;
+
+// OpenRouter API configuration
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "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";
 
 // Global variables
 let fullPdfText = '';
 let isServerReady = false;
 
-// Load knowledge base from text file as primary source
+// Load knowledge base from text file
 function loadKnowledgeBaseText() {
   try {
     const possiblePaths = [
@@ -47,28 +49,18 @@ function loadKnowledgeBaseText() {
   }
 }
 
-// Enhanced OpenRouter API call with retry logic and multiple models
-async function callOpenRouterAPI(userMessage, pdfContext, retryCount = 0) {
-  const maxRetries = 3;
-  
-  // Try different models in order of preference (via OpenRouter)
+// Fallback: Call OpenRouter API when Ollama fails
+async function callOpenRouterAPI(userMessage, pdfContext) {
   const models = [
     'openai/gpt-4o',
     'anthropic/claude-3-5-sonnet',
-    'openai/gpt-4-turbo',
     'google/gemini-1.5-flash'
   ];
   
-  const currentModel = models[Math.min(retryCount, models.length - 1)];
+  const hasPdfContent = pdfContext && pdfContext.length > 100;
   
-  try {
-    // Use PDF context if available, otherwise use generic prompt
-    const hasPdfContent = pdfContext && pdfContext.length > 100;
-    
-    console.log(`📄 PDF context available: ${hasPdfContent} (${pdfContext?.length || 0} chars)`);
-    
-    const prompt = hasPdfContent 
-      ? `STRICT INSTRUCTIONS: You must ONLY use the information from the CamTech Knowledge Base below. Do NOT use any external knowledge or general information about universities. If the answer is not in this knowledge base, say "I don't have that specific information in the CamTech documentation."
+  const prompt = hasPdfContent 
+    ? `STRICT INSTRUCTIONS: You must ONLY use the information from the CamTech Knowledge Base below. Do NOT use any external knowledge or general information about universities. If the answer is not in this knowledge base, say "I don't have that specific information in the CamTech documentation."
 
 === CAMTECH KNOWLEDGE BASE ===
 ${pdfContext.substring(0, 18000)}
@@ -76,85 +68,46 @@ ${pdfContext.substring(0, 18000)}
 
 Question: ${userMessage}
 
-Your answer must be based EXCLUSIVELY on the knowledge base above. Include specific details like degree names, durations, career pathways, salary ranges, and entry requirements when available.`
-      : `You are a helpful assistant for CamTech educational institution. Answer the following question as best as you can: ${userMessage}`;
+Your answer must be based EXCLUSIVELY on the knowledge base above.`
+    : `You are a helpful assistant for CamTech educational institution. Answer the following question as best as you can: ${userMessage}`;
 
-    console.log(`🤖 Trying model: ${currentModel} (attempt ${retryCount + 1})`);
-
-    const response = await fetch(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "http://localhost:5001",
-          "X-Title": "CamTech Chatbot"
-        },
-        body: JSON.stringify({
-          model: currentModel,
-          messages: [
-            { role: "user", content: prompt }
-          ],
-          temperature: 0.3,
-          max_tokens: 2000
-        })
-      }
-    );
-
-    console.log(`📡 Response status: ${response.status}`);
-
-    // Handle specific error codes
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`❌ API Error: ${response.status} - ${errorText}`);
+  for (const model of models) {
+    try {
+      console.log(`🌐 Trying OpenRouter fallback: ${model}`);
       
-      if (response.status === 503 && retryCount < maxRetries) {
-        console.log(`⏳ Service unavailable, retrying...`);
-        await new Promise(resolve => setTimeout(resolve, (retryCount + 1) * 2000));
-        return callOpenRouterAPI(userMessage, pdfContext, retryCount + 1);
-      }
-      
-      if (response.status === 429) {
-        console.log('⚠️  Rate limit exceeded');
-        throw new Error('Rate limit exceeded - please try again later');
-      }
-      
-      if (response.status === 401) {
-        console.log('⚠️  Invalid API key');
-        throw new Error('Invalid API key');
-      }
-      
-      throw new Error(`OpenRouter API responded with status: ${response.status}`);
-    }
+      const response = await fetch(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+            "HTTP-Referer": "http://localhost:5001",
+            "X-Title": "CamTech Chatbot"
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.3,
+            max_tokens: 2000
+          })
+        }
+      );
 
-    const data = await response.json();
-    
-    if (data.error) {
-      throw new Error(`OpenRouter API error: ${data.error.message}`);
+      if (response.ok) {
+        const data = await response.json();
+        const aiText = data?.choices?.[0]?.message?.content;
+        if (aiText) {
+          console.log(`✅ OpenRouter success with ${model}`);
+          return aiText;
+        }
+      }
+    } catch (error) {
+      console.warn(`⚠️  OpenRouter ${model} failed: ${error.message}`);
     }
-
-    const aiText = data?.choices?.[0]?.message?.content;
-    
-    if (!aiText) {
-      console.log('⚠️  No text in response');
-      throw new Error('No content in API response');
-    }
-
-    console.log(`✅ Success with model: ${currentModel}`);
-    return aiText;
-    
-  } catch (error) {
-    console.error(`🔥 OpenRouter API error with ${currentModel}:`, error.message);
-    
-    // If we've tried all models and retries, throw error
-    if (retryCount >= maxRetries) {
-      throw error;
-    }
-    
-    // Try next model/retry
-    return callOpenRouterAPI(userMessage, pdfContext, retryCount + 1);
   }
+  
+  throw new Error('All OpenRouter models failed');
 }
 
 // PDF Processing Function
@@ -241,32 +194,58 @@ app.post('/api/ask-gemini', async (req, res) => {
   }
 
   console.log(`💬 User question: "${userMessage}"`);
-  console.log(`📄 PDF context length: ${fullPdfText.length} chars`);
+  console.log(`📄 Knowledge base length: ${fullPdfText.length} chars`);
 
-  try {
-    // Call OpenRouter API with PDF context if available
-    const aiResponse = await callOpenRouterAPI(userMessage, fullPdfText);
+try {
+    // Set knowledge base for DeepSeek service
+    deepSeekService.setKnowledgeBase(fullPdfText);
     
-    console.log(`🤖 Response length: ${aiResponse.length} characters`);
+    // Call DeepSeek API with knowledge base context
+    const result = await deepSeekService.generateResponse(userMessage);
+    
+    console.log(`🤖 Response received from ${result.server} (${result.text.length} chars)`);
     
     res.json({ 
-      text: aiResponse,
-      hasContext: fullPdfText.length > 0
+      text: result.text,
+      hasContext: fullPdfText.length > 0,
+      server: result.server,
+      model: result.model
     });
     
   } catch (error) {
-    console.error('❌ API Error:', error);
-    res.status(500).json({ 
-      error: 'Failed to generate response',
-      message: 'Sorry, I encountered an error. Please try again.',
-      details: error.message
-    });
+    console.error('❌ DeepSeek API Error:', error.message);
+    console.log('🔄 Trying OpenRouter fallback...');
+    
+    // Fallback to OpenRouter API
+    try {
+      const fallbackResult = await callOpenRouterAPI(userMessage, fullPdfText);
+      
+      console.log(`✅ OpenRouter fallback success (${fallbackResult.length} chars)`);
+      
+      res.json({ 
+        text: fallbackResult,
+        hasContext: fullPdfText.length > 0,
+        server: 'OpenRouter',
+        model: 'fallback'
+      });
+    } catch (fallbackError) {
+      console.error('❌ Fallback also failed:', fallbackError);
+      res.status(500).json({ 
+        error: 'Failed to generate response',
+        message: 'Sorry, I encountered an error. Please try again.',
+        details: error.message
+      });
+    }
   }
 });
 
 // Start server
 async function startServer() {
   console.log('🚀 Starting CamTecher Chatbot Server...');
+  
+  // Initialize DeepSeek service first
+  console.log('🔧 Initializing DeepSeek service...');
+  await deepSeekService.initialize();
   
   // Try to load from PDF first
   await loadPdfText();
@@ -277,12 +256,16 @@ async function startServer() {
     fullPdfText = loadKnowledgeBaseText();
   }
   
+  // Set knowledge base for DeepSeek
+  deepSeekService.setKnowledgeBase(fullPdfText);
+  
   app.listen(PORT, () => {
     isServerReady = true;
     console.log(`✅ Server running at http://localhost:${PORT}`);
     console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
     console.log(`💬 Chat endpoint: http://localhost:${PORT}/api/ask-gemini`);
     console.log(`📄 Knowledge base loaded: ${fullPdfText.length > 0 ? 'Yes' : 'No'} (${fullPdfText.length} chars)`);
+    console.log(`🤖 Using DeepSeek model: deepseek-r1 via Ollama`);
     console.log('🔥 Ready to receive questions!');
   });
 }
