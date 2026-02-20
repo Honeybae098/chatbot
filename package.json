@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "server": "node server.js",
+    "server": "node BackEnd/server.js",
     "dev:full": "concurrently \"npm run server\" \"npm run dev\"",
     "start": "npm run server"
   },
@@ -15,6 +15,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "lucide-react": "^0.327.0",
+    "mongoose": "^9.2.1",
     "pdfjs-dist": "^2.16.105",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"

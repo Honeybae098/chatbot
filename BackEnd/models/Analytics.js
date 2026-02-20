@@ -1,3 +1,5 @@
+import mongoose from 'mongoose';
+
 // models/Analytics.js
 const analyticsSchema = new mongoose.Schema({
   date: { type: Date, default: Date.now, index: true },
@@ -28,3 +30,7 @@ const analyticsSchema = new mongoose.Schema({
 // 3. How many escalations?
 // 4. Average confidence score
 // 5. Common drop-off points
+
+const Analytics = mongoose.model('Analytics', analyticsSchema);
+
+export default Analytics;
